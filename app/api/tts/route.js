@@ -12,14 +12,17 @@ export const maxDuration = 60;
 // Korean passage measured ~45s wall-clock to synthesize, so anything much
 // longer than that in a single call risks timing out mid-request. Rather
 // than cap total length tightly, long single-voice text is split into
-// SINGLE_CHUNK_SIZE-sized pieces and generated in parallel, the same trick
-// handleMulti already uses per script line — see splitIntoChunks() below.
+// SINGLE_CHUNK_SIZE-sized pieces and generated with limited concurrency,
+// as handleMulti does per script line — see splitIntoChunks() below.
 const SINGLE_CHUNK_SIZE = 1000;
 const MAX_CHARS_SINGLE = 8000;
 const MAX_CHARS_PER_TURN = 1000;
 const MAX_CHARS_SCRIPT = 8000;
 const MAX_TURNS = 60;
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const GEMINI_CONCURRENCY = 5;
+const GEMINI_MAX_RETRIES = 4;
+const GEMINI_RETRY_DEADLINE_MS = 50_000;
 
 // Splits long text on paragraph breaks first, falling back to sentence
 // breaks for any paragraph that's still too long on its own.
@@ -106,26 +109,65 @@ function buildSpeechRequest({ text, voice, style }) {
   };
 }
 
-async function callGemini(requestBody, apiKey) {
+async function callGemini(requestBody, apiKey, signal) {
   let res;
   try {
     res = await fetch(GEMINI_URL, {
       method: "POST",
       headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
+      signal,
     });
   } catch {
+    if (signal?.aborted) throw new Error("음성 생성 시간이 초과됐어요. 대사를 나눠서 다시 시도해주세요.");
     throw new Error("Gemini 서버에 연결하지 못했어요.");
   }
 
   const json = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error(json?.error?.message || `Gemini API 오류 (HTTP ${res.status})`);
+    const error = new Error(json?.error?.message || `Gemini API 오류 (HTTP ${res.status})`);
+    error.status = res.status;
+    throw error;
   }
 
   const audio = extractAudio(json);
   if (!audio) throw new Error("음성 데이터를 받지 못했어요.");
   return audio;
+}
+
+async function callGeminiWithRetry(requestBody, apiKey, deadline) {
+  for (let attempt = 0; ; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("음성 생성 시간이 초과됐어요. 대사를 나눠서 다시 시도해주세요.");
+    try {
+      return await callGemini(requestBody, apiKey, AbortSignal.timeout(remaining));
+    } catch (error) {
+      if (error.status !== 429 || attempt >= GEMINI_MAX_RETRIES) throw error;
+
+      const hint = error.message.match(/retry\s+in\s+([\d.]+)\s*(ms|milliseconds?|s|seconds?)\b/i);
+      const delay = hint
+        ? Number(hint[1]) * (hint[2].toLowerCase().startsWith("m") ? 1 : 1000)
+        : 1000 * 2 ** attempt;
+      if (!Number.isFinite(delay) || delay < 0 || Date.now() + delay >= deadline) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+async function mapWithConcurrency(items, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(GEMINI_CONCURRENCY, items.length) }, async () => {
+      while (next < items.length) {
+        const index = next++;
+        results[index] = await worker(items[index], index);
+      }
+    })
+  );
+  return results;
 }
 
 async function handleSingle(body, apiKey) {
@@ -139,15 +181,17 @@ async function handleSingle(body, apiKey) {
   }
 
   const chunks = splitIntoChunks(text, SINGLE_CHUNK_SIZE);
+  const deadline = Date.now() + GEMINI_RETRY_DEADLINE_MS;
   if (chunks.length === 1) {
-    const audio = await callGemini(buildSpeechRequest({ text: chunks[0], voice, style }), apiKey);
+    const audio = await callGeminiWithRetry(buildSpeechRequest({ text: chunks[0], voice, style }), apiKey, deadline);
     return { audio };
   }
 
   let clips;
   try {
-    clips = await Promise.all(
-      chunks.map((chunk) => callGemini(buildSpeechRequest({ text: chunk, voice, style }), apiKey))
+    clips = await mapWithConcurrency(
+      chunks,
+      (chunk) => callGeminiWithRetry(buildSpeechRequest({ text: chunk, voice, style }), apiKey, deadline)
     );
   } catch (e) {
     return { error: e.message };
@@ -182,20 +226,23 @@ async function handleMulti(body, apiKey) {
   // speakers per call — undocumented, found by testing; 3+ returns a plain
   // 400 "Invalid input received." A narrator + 2 characters already breaks
   // that, so instead each line is generated with its own single-speaker call
-  // (in parallel) and the resulting WAV clips are stitched together below.
+  // (with limited concurrency) and the resulting WAV clips are stitched together below.
+  const deadline = Date.now() + GEMINI_RETRY_DEADLINE_MS;
   let clips;
   try {
-    clips = await Promise.all(
-      turns.map(async (t, i) => {
+    clips = await mapWithConcurrency(
+      turns,
+      async (t, i) => {
         try {
-          return await callGemini(
+          return await callGeminiWithRetry(
             buildSpeechRequest({ text: t.text, voice: t.voice, style: t.style }),
-            apiKey
+            apiKey,
+            deadline
           );
         } catch (e) {
           throw new Error(`${i + 1}번째 줄(${t.speaker}) 생성 실패: ${e.message}`);
         }
-      })
+      }
     );
   } catch (e) {
     return { error: e.message };
