@@ -12,6 +12,10 @@ export async function GET(request, { params }) {
   const audio = await readAudio(session.user.email, params.id);
   if (!audio) return new Response("파일을 찾을 수 없어요.", { status: 404 });
 
+  // Blob already serves the file directly; routing long WAVs through this
+  // function would hit Vercel's response-body size limit.
+  if (audio.url) return Response.redirect(audio.url, 307);
+
   return new Response(audio.buffer, {
     headers: {
       "Content-Type": audio.mimeType,

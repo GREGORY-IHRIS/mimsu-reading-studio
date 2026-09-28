@@ -22,6 +22,11 @@ export async function GET() {
     id: v.id,
     displayName: v.displayName,
     tag: v.tag,
+    description: v.description,
+    gender: v.gender,
+    age: v.age,
+    region: v.region,
+    pitch: v.pitch,
     group: "내가 만든 목소리",
   }));
 

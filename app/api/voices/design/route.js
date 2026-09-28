@@ -47,6 +47,9 @@ export async function POST(request) {
   const description = (body?.description || "").trim();
   const displayName = (body?.displayName || "").trim();
   const gender = body?.gender === "male" || body?.gender === "female" ? body.gender : "unspecified";
+  const age = Number.parseInt(body?.age, 10) || null;
+  const region = body?.dialectMode === "standard" ? "seoul" : body?.dialectRegion?.trim() === "부산" ? "busan" : null;
+  const pitch = { 낮은: "low", 중간: "medium", 높은: "high" }[body?.pitch] || null;
 
   if (!description) {
     return NextResponse.json({ error: "원하는 목소리를 문장으로 설명해주세요." }, { status: 400 });
@@ -104,12 +107,16 @@ export async function POST(request) {
     displayName,
     tag: gender === "male" ? "남성 · 내 디자인" : gender === "female" ? "여성 · 내 디자인" : "내 디자인",
     description,
+    gender,
+    age,
+    region,
+    pitch,
     createdAt: new Date().toISOString(),
   };
   await saveCustomVoice(session.user.email, voice);
 
   return NextResponse.json({
-    voice: { id: voice.id, displayName: voice.displayName, tag: voice.tag, group: "내가 만든 목소리" },
+    voice: { ...voice, group: "내가 만든 목소리" },
     sampleAudioBase64: sample?.base64 || null,
     sampleMimeType: sample?.mimeType || "audio/wav",
   });

@@ -4,9 +4,12 @@ import { useMemo, useRef, useState } from "react";
 import CastManager from "./CastManager";
 import TagToolbar from "./TagToolbar";
 import { parseScript, nextAvailableVoice } from "../lib/script";
-import { generateAndSave } from "../lib/audio";
+import { combineAndSave, generateSegment } from "../lib/audio";
+import { buildVoiceStyle } from "../lib/voiceStyle";
+import { makeBatches, requestCapacity, retryHintMs } from "../lib/scriptBatches";
 
 const MAX_CHARS = 8000;
+const MAX_BATCH_RETRIES = 3;
 const EXAMPLE = `밤안개가 골목 끝까지 자욱하게 내려앉았다.
 지우: 누구야...? 거기 누구 있어?
 그림자가 천천히 다가왔다.
@@ -16,6 +19,7 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
   const [scriptText, setScriptText] = useState("");
   const [overrideStyle, setOverrideStyle] = useState("");
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(null);
   const [formatting, setFormatting] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
@@ -84,18 +88,59 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
       return {
         speaker: t.speaker,
         voice: c?.voice || voices[0].id,
-        style: overrideStyle.trim() || c?.style || "",
+        style: overrideStyle.trim() || buildVoiceStyle(c),
         text: t.text,
       };
     });
 
     setLoading(true);
     try {
-      const history = await generateAndSave({ mode: "multi", turns });
+      const batches = makeBatches(turns);
+      const total = batches.length;
+      const clips = [];
+      let recentRequests = [];
+      async function waitWithProgress(ms) {
+        const until = Date.now() + ms;
+        while (Date.now() < until) {
+          const remaining = until - Date.now();
+          setProgress({ done: clips.length, total, waitSeconds: Math.ceil(remaining / 1000) });
+          await new Promise((resolve) => setTimeout(resolve, Math.min(1000, remaining)));
+        }
+        setProgress({ done: clips.length, total });
+      }
+      async function waitForCapacity(count) {
+        for (;;) {
+          const capacity = requestCapacity(recentRequests, count);
+          recentRequests = capacity.active;
+          if (capacity.waitMs === 0) break;
+          await waitWithProgress(capacity.waitMs);
+        }
+        recentRequests.push(...Array(count).fill(Date.now()));
+      }
+      setProgress({ done: 0, total });
+      for (const batch of batches) {
+        for (let attempt = 0; ; attempt++) {
+          await waitForCapacity(batch.turns.length);
+          try {
+            const segment = await generateSegment({ mode: "multi", turns: batch.turns });
+            clips.push(segment.base64);
+            break;
+          } catch (e) {
+            if (e.status !== 429 || attempt >= MAX_BATCH_RETRIES) {
+              throw new Error(`${batch.start + 1}~${batch.end + 1}번째 줄 구간 생성 실패: ${e.message}`);
+            }
+            await waitWithProgress((retryHintMs(e.message) ?? 60_000) + 2000);
+          }
+        }
+        setProgress({ done: clips.length, total });
+      }
+      setProgress({ done: total, total, saving: true });
+      const history = await combineAndSave(clips, turns);
       onHistory(history);
     } catch (e) {
       setError(e.message);
     } finally {
+      setProgress(null);
       setLoading(false);
     }
   }
@@ -164,10 +209,18 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
         )}
 
         <button className="generate-button" onClick={handleGenerate} disabled={loading}>
-          {loading ? "만드는 중... (등장인물이 많으면 조금 걸려요)" : "대본 전체 듣기"}
+          {loading
+            ? progress
+              ? progress.waitSeconds
+                ? `요청 제한 대기 중... 약 ${progress.waitSeconds}초 (${progress.done}/${progress.total} 구간)`
+                : progress.saving
+                  ? "음성 합치고 저장하는 중..."
+                  : `생성 중... (${progress.done}/${progress.total} 구간)`
+              : "만드는 중... (등장인물이 많으면 조금 걸려요)"
+            : "대본 전체 듣기"}
         </button>
         <p className="hint">
-          한 번에 {MAX_CHARS}자, 대사 60줄까지 가능해요. 긴 장면은 나눠서 넣어주세요.
+          한 번에 {MAX_CHARS}자까지 가능해요. 대사가 많으면 자동으로 여러 구간으로 나눠서 순서대로 생성해요.
         </p>
       </div>
     </>

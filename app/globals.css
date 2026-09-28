@@ -424,7 +424,7 @@ select {
 .cast-row {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 10px;
   flex-wrap: wrap;
 }
@@ -438,10 +438,76 @@ select {
   background: #fffefb;
 }
 
-.cast-row select {
-  flex: 1 1 160px;
-  width: auto;
-  padding: 10px 12px;
+.cast-row .voice-select-wrap {
+  flex: 1 1 220px;
+}
+
+/* Guided voice chooser */
+
+.voice-select-wrap {
+  min-width: 0;
+}
+
+.voice-choice-toggle {
+  width: 100%;
+  padding: 11px 12px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--ink);
+  background: #fffefb;
+}
+
+.voice-choice-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fffaf2;
+}
+
+.voice-choice-panel label,
+.cast-create label:not(.field-label) {
+  display: grid;
+  gap: 5px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.voice-choice-panel .hint,
+.cast-create .hint {
+  margin: 0;
+}
+
+.voice-choice-list {
+  display: grid;
+  gap: 6px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.voice-choice-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 11px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--ink);
+  background: #fffefb;
+}
+
+.voice-choice-item span {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.voice-choice-item.selected {
+  border-color: var(--accent);
+  background: #fff2e4;
 }
 
 .cast-row .cast-style {
@@ -451,6 +517,13 @@ select {
   border-radius: 10px;
   font-size: 0.9rem;
   background: #fffefb;
+}
+
+.cast-row .cast-detail-select {
+  width: auto;
+  flex: 1 1 110px;
+  padding: 10px;
+  font-size: 0.85rem;
 }
 
 .cast-preview {
@@ -482,6 +555,26 @@ select {
 .cast-row-new {
   padding-top: 10px;
   border-top: 1px dashed var(--border);
+}
+
+.cast-create {
+  display: grid;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border);
+}
+
+.cast-create .cast-name {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fffefb;
+}
+
+.cast-create textarea {
+  min-height: 76px;
+  font-size: 0.95rem;
 }
 
 .cast-add {
@@ -662,4 +755,23 @@ select {
 
 .voice-designer-body > * + * {
   margin-top: 10px;
+}
+
+.wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.wizard-preview {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fffaf2;
+}
+
+@media (max-width: 520px) {
+  .wizard-grid {
+    grid-template-columns: 1fr;
+  }
 }

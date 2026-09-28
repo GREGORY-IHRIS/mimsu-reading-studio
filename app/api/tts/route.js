@@ -4,6 +4,8 @@ import { authOptions } from "../../../lib/authOptions";
 import { concatWavBuffers } from "../../../lib/wav";
 import { addHistoryEntry, saveAudio } from "../../../lib/store";
 
+const SCRIPT_MODES = new Set(["multi", "save", "record"]);
+
 export const maxDuration = 60;
 
 // Gemini itself accepts far more text per call than these numbers suggest
@@ -18,7 +20,9 @@ const SINGLE_CHUNK_SIZE = 1000;
 const MAX_CHARS_SINGLE = 8000;
 const MAX_CHARS_PER_TURN = 1000;
 const MAX_CHARS_SCRIPT = 8000;
-const MAX_TURNS = 60;
+// Keep each call within the 10 requests/minute quota and Vercel's 60s budget;
+// the client sends longer scripts as multiple batches.
+const MAX_TURNS = 10;
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const GEMINI_CONCURRENCY = 5;
 const GEMINI_MAX_RETRIES = 4;
@@ -159,11 +163,17 @@ async function callGeminiWithRetry(requestBody, apiKey, deadline) {
 async function mapWithConcurrency(items, worker) {
   const results = new Array(items.length);
   let next = 0;
+  let failed = false;
   await Promise.all(
     Array.from({ length: Math.min(GEMINI_CONCURRENCY, items.length) }, async () => {
-      while (next < items.length) {
+      while (!failed && next < items.length) {
         const index = next++;
-        results[index] = await worker(items[index], index);
+        try {
+          results[index] = await worker(items[index], index);
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
       }
     })
   );
@@ -240,17 +250,28 @@ async function handleMulti(body, apiKey) {
             deadline
           );
         } catch (e) {
-          throw new Error(`${i + 1}번째 줄(${t.speaker}) 생성 실패: ${e.message}`);
+          const error = new Error(`${i + 1}번째 줄(${t.speaker}) 생성 실패: ${e.message}`);
+          error.status = e.status;
+          throw error;
         }
       }
     );
   } catch (e) {
-    return { error: e.message };
+    return { error: e.message, status: e.status };
   }
 
   const buffers = clips.map((c) => Buffer.from(c.base64, "base64"));
   const combined = concatWavBuffers(buffers, 250);
   return { audio: { base64: combined.toString("base64"), mimeType: "audio/wav" } };
+}
+
+// Saves audio that the client already produced in full (e.g. batches of a
+// long script stitched together locally — see lib/wavClient.js) instead of
+// generating or re-combining anything server-side.
+function handleSave(body) {
+  const base64 = body?.audioBase64;
+  if (!base64) return { error: "저장할 음성 데이터가 없어요." };
+  return { audio: { base64, mimeType: body.mimeType || "audio/wav" } };
 }
 
 export async function POST(request) {
@@ -272,15 +293,36 @@ export async function POST(request) {
     return NextResponse.json({ error: "요청 형식이 올바르지 않아요." }, { status: 400 });
   }
 
+  // The audio for "record" already lives in Blob storage (uploaded straight
+  // from the browser) — just write the history entry, no audio to touch.
+  if (body.mode === "record") {
+    if (!body.id) return NextResponse.json({ error: "저장할 음성 정보가 없어요." }, { status: 400 });
+    try {
+      const history = await addHistoryEntry(session.user.email, buildEntry(body.id, body, body.mimeType || "audio/wav"));
+      return NextResponse.json({ entry: history.find((h) => h.id === body.id), history });
+    } catch (e) {
+      return NextResponse.json(
+        { error: `기록 저장에 실패했어요: ${e.message || "알 수 없는 오류"}` },
+        { status: 502 }
+      );
+    }
+  }
+
   let result;
   try {
-    result = body.mode === "multi" ? await handleMulti(body, apiKey) : await handleSingle(body, apiKey);
+    if (body.mode === "save") {
+      result = handleSave(body);
+    } else if (body.mode === "multi") {
+      result = await handleMulti(body, apiKey);
+    } else {
+      result = await handleSingle(body, apiKey);
+    }
   } catch (e) {
     return NextResponse.json({ error: e.message || "알 수 없는 오류가 발생했어요." }, { status: 502 });
   }
 
   if (result.error) {
-    return NextResponse.json({ error: result.error }, { status: 400 });
+    return NextResponse.json({ error: result.error }, { status: result.status === 429 ? 429 : 400 });
   }
 
   // Previews (voice try-outs in the cast manager) are throwaway — just hand
@@ -295,17 +337,7 @@ export async function POST(request) {
 
   try {
     await saveAudio(email, id, buffer, result.audio.mimeType);
-
-    const entry = {
-      id,
-      label: body.mode === "multi" ? `대본 · 등장인물 ${new Set(body.turns.map((t) => t.speaker)).size}명` : `${body.voice}${body.style ? ` · ${body.style}` : ""}`,
-      snippet: buildSnippet(body),
-      createdAt: new Date().toISOString(),
-      mimeType: result.audio.mimeType,
-      name: null,
-      pinned: false,
-      folder: null,
-    };
+    const entry = buildEntry(id, body, result.audio.mimeType);
     const history = await addHistoryEntry(email, entry);
 
     return NextResponse.json({ entry, history });
@@ -317,8 +349,21 @@ export async function POST(request) {
   }
 }
 
+function buildEntry(id, body, mimeType) {
+  return {
+    id,
+    label: SCRIPT_MODES.has(body.mode) ? `대본 · 등장인물 ${new Set((body.turns || []).map((t) => t.speaker)).size}명` : `${body.voice}${body.style ? ` · ${body.style}` : ""}`,
+    snippet: buildSnippet(body),
+    createdAt: new Date().toISOString(),
+    mimeType,
+    name: null,
+    pinned: false,
+    folder: null,
+  };
+}
+
 function buildSnippet(body) {
-  const raw = body.mode === "multi" ? body.turns.map((t) => t.text).join(" ") : body.text || "";
+  const raw = SCRIPT_MODES.has(body.mode) ? (body.turns || []).map((t) => t.text).join(" ") : body.text || "";
   const trimmed = raw.trim();
   return trimmed.slice(0, 40) + (trimmed.length > 40 ? "…" : "");
 }
