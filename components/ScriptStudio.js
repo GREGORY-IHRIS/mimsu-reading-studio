@@ -7,20 +7,46 @@ import { parseScript, nextAvailableVoice } from "../lib/script";
 import { generateAndSave } from "../lib/audio";
 
 const MAX_CHARS = 4000;
-const EXAMPLE = `나레이터: 밤안개가 골목 끝까지 자욱하게 내려앉았다.
+const EXAMPLE = `밤안개가 골목 끝까지 자욱하게 내려앉았다.
 지우: 누구야...? 거기 누구 있어?
-나레이터: 그림자가 천천히 다가왔다.
+그림자가 천천히 다가왔다.
 민준: 나야, 놀라지 마.`;
 
 export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
   const [scriptText, setScriptText] = useState("");
   const [overrideStyle, setOverrideStyle] = useState("");
   const [loading, setLoading] = useState(false);
+  const [formatting, setFormatting] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const textareaRef = useRef(null);
 
   const preview = useMemo(() => parseScript(scriptText, cast), [scriptText, cast]);
+
+  async function handleAutoFormat() {
+    setError("");
+    setNote("");
+    if (!scriptText.trim()) {
+      setError("정리할 글을 먼저 입력해주세요.");
+      return;
+    }
+    setFormatting(true);
+    try {
+      const res = await fetch("/api/script/format", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: scriptText, castNames: cast.map((c) => c.name) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "정리에 실패했어요.");
+      setScriptText(data.text);
+      setNote("AI가 대사와 나레이션을 구분해봤어요 — 생성 전에 한 번 훑어보고 틀린 부분은 직접 고쳐주세요.");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setFormatting(false);
+    }
+  }
 
   async function handleGenerate() {
     setError("");
@@ -96,9 +122,22 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
           placeholder={`"이름: 대사" 형식으로 한 줄씩 적어주세요. 예:\n\n${EXAMPLE}`}
         />
         <TagToolbar textareaRef={textareaRef} value={scriptText} onChange={setScriptText} />
+
+        <button
+          type="button"
+          className="chip"
+          style={{ marginTop: 10 }}
+          onClick={handleAutoFormat}
+          disabled={formatting || !scriptText.trim()}
+        >
+          {formatting ? "AI가 대사를 나누는 중..." : "✨ AI로 대사·나레이션 자동 구분"}
+        </button>
+
         <p className="hint">
-          "이름: 대사"로 시작하면 새 화자, 콜론 없이 이어 쓰면 같은 화자의 대사가 계속돼요.
-          처음 보는 이름이 나오면 목소리를 자동으로 배정해드려요.
+          "이름: 대사"로 쓴 줄만 그 캐릭터 대사로 읽혀요. 이름 없이 그냥 쓴 줄은 전부
+          나레이션으로 처리돼요. 대본 형식 없이 소설처럼 줄글로 썼다면 위 버튼으로 AI가
+          대신 나눠줄 수 있어요 (100% 정확하진 않으니 결과를 확인해주세요). 처음 보는 이름이
+          나오면 목소리를 자동으로 배정해드려요.
         </p>
         {detectedSpeakers.length > 0 && (
           <p className="hint">감지된 화자: {detectedSpeakers.join(", ")}</p>
