@@ -6,11 +6,47 @@ import { addHistoryEntry, saveAudio } from "../../../lib/store";
 
 export const maxDuration = 60;
 
-const MAX_CHARS_SINGLE = 2000;
+// Gemini itself accepts far more text per call than these numbers suggest
+// (tested up to ~4800 chars with no rejection) — the real ceiling is our own
+// Vercel function's 60s timeout below. A real (non-repetitive) ~1000-char
+// Korean passage measured ~45s wall-clock to synthesize, so anything much
+// longer than that in a single call risks timing out mid-request. Rather
+// than cap total length tightly, long single-voice text is split into
+// SINGLE_CHUNK_SIZE-sized pieces and generated in parallel, the same trick
+// handleMulti already uses per script line — see splitIntoChunks() below.
+const SINGLE_CHUNK_SIZE = 1000;
+const MAX_CHARS_SINGLE = 8000;
 const MAX_CHARS_PER_TURN = 1000;
-const MAX_CHARS_SCRIPT = 4000;
+const MAX_CHARS_SCRIPT = 8000;
 const MAX_TURNS = 60;
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+
+// Splits long text on paragraph breaks first, falling back to sentence
+// breaks for any paragraph that's still too long on its own.
+function splitIntoChunks(text, maxChars) {
+  if (text.length <= maxChars) return [text];
+
+  const parts = text.split(/\n{2,}/).flatMap((para) => {
+    const trimmed = para.trim();
+    return trimmed.length <= maxChars ? [trimmed] : trimmed.split(/(?<=[.?!다요])\s+/);
+  });
+
+  const chunks = [];
+  let current = "";
+  for (const part of parts) {
+    const piece = part.trim();
+    if (!piece) continue;
+    const candidate = current ? `${current}\n\n${piece}` : piece;
+    if (candidate.length <= maxChars) {
+      current = candidate;
+      continue;
+    }
+    if (current) chunks.push(current);
+    current = piece.length <= maxChars ? piece : piece.slice(0, maxChars);
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
 
 function extractAudio(json) {
   // Documented shape: steps[] where type === "model_output", each with a
@@ -102,8 +138,24 @@ async function handleSingle(body, apiKey) {
     return { error: `한 번에 ${MAX_CHARS_SINGLE}자까지만 가능해요. 장면을 나눠서 보내주세요.` };
   }
 
-  const audio = await callGemini(buildSpeechRequest({ text, voice, style }), apiKey);
-  return { audio };
+  const chunks = splitIntoChunks(text, SINGLE_CHUNK_SIZE);
+  if (chunks.length === 1) {
+    const audio = await callGemini(buildSpeechRequest({ text: chunks[0], voice, style }), apiKey);
+    return { audio };
+  }
+
+  let clips;
+  try {
+    clips = await Promise.all(
+      chunks.map((chunk) => callGemini(buildSpeechRequest({ text: chunk, voice, style }), apiKey))
+    );
+  } catch (e) {
+    return { error: e.message };
+  }
+
+  const buffers = clips.map((c) => Buffer.from(c.base64, "base64"));
+  const combined = concatWavBuffers(buffers, 150);
+  return { audio: { base64: combined.toString("base64"), mimeType: "audio/wav" } };
 }
 
 async function handleMulti(body, apiKey) {

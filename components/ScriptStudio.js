@@ -6,7 +6,7 @@ import TagToolbar from "./TagToolbar";
 import { parseScript, nextAvailableVoice } from "../lib/script";
 import { generateAndSave } from "../lib/audio";
 
-const MAX_CHARS = 4000;
+const MAX_CHARS = 8000;
 const EXAMPLE = `밤안개가 골목 끝까지 자욱하게 내려앉았다.
 지우: 누구야...? 거기 누구 있어?
 그림자가 천천히 다가왔다.

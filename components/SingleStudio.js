@@ -6,7 +6,7 @@ import { generateAndSave } from "../lib/audio";
 import TagToolbar from "./TagToolbar";
 import VoiceSelect from "./VoiceSelect";
 
-const MAX_CHARS = 2000;
+const MAX_CHARS = 8000;
 
 export default function SingleStudio({ voices, onHistory }) {
   const [text, setText] = useState("");

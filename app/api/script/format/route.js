@@ -5,7 +5,7 @@ import { authOptions } from "../../../../lib/authOptions";
 export const maxDuration = 30;
 
 const MODEL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent";
-const MAX_CHARS = 4000;
+const MAX_CHARS = 8000;
 
 function buildPrompt(rawText, castNames) {
   return `다음은 사용자가 쓴 글입니다. 이걸 대사/나레이션이 구분된 "대본 형식"으로 바꿔주세요.
