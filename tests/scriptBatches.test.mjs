@@ -35,7 +35,9 @@ test("long scripts retain all text and use fewer requests than lines", () => {
   assert.ok(batches.every((batch) => batch.turns.length <= BATCH_SIZE));
   assert.ok(batches.every((batch) => makeSpeechGroups(batch.turns).length <= REQUESTS_PER_WINDOW));
   const calls = batches.reduce((sum, batch) => sum + makeSpeechGroups(batch.turns).length, 0);
-  assert.ok(calls < turns.length, `expected fewer than ${turns.length} calls, got ${calls}`);
+  assert.equal(calls, 30);
+  assert.equal(makeBatches(turns, { layout: 1 }).reduce((sum, batch) => sum + makeSpeechGroups(batch.turns).length, 0), 37);
+  assert.equal(makeBatches(turns, { layout: 2 }).reduce((sum, batch) => sum + makeSpeechGroups(batch.turns).length, 0), 34);
 });
 
 test("a short four-speaker scene uses fewer requests without dropping voices", () => {
@@ -45,8 +47,25 @@ test("a short four-speaker scene uses fewer requests without dropping voices", (
   const batches = makeBatches(turns);
   assert.equal(batches.length, 1);
   assert.equal(batches.reduce((sum, batch) => sum + makeSpeechGroups(batch.turns).length, 0), 4);
-  const legacyBatches = makeBatches(turns, { maxTurns: 8, maxChars: 400 });
+  const legacyBatches = makeBatches(turns, { layout: 1 });
   assert.equal(legacyBatches.reduce((sum, batch) => sum + makeSpeechGroups(batch.turns).length, 0), 5);
+});
+
+test("many short turns with two speakers fit in one call", () => {
+  const turns = Array.from({ length: 60 }, (_, i) =>
+    turn(`화자${i % 2}`, `Voice${i % 2}`, "가".repeat(10))
+  );
+  assert.equal(makeBatches(turns).length, 1);
+  assert.equal(makeSpeechGroups(makeBatches(turns)[0].turns).length, 1);
+});
+
+test("different styles on one speaker can join a later two-speaker conversation", () => {
+  const groups = makeSpeechGroups([
+    turn("엄마", "Kore", "첫 줄", "calm"),
+    turn("엄마", "Kore", "둘째 줄", "cheerful"),
+    turn("아이", "Puck", "셋째 줄", "curious"),
+  ]);
+  assert.equal(groups.length, 1);
 });
 
 test("a dense scene never asks the client to reserve more than eight requests", () => {

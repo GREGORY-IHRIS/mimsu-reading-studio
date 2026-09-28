@@ -19,9 +19,9 @@ const SINGLE_CHUNK_SIZE = 1000;
 const MAX_CHARS_SINGLE = 8000;
 const MAX_CHARS_PER_TURN = 1000;
 const MAX_CHARS_SCRIPT = 8000;
-// The client sends long scripts in batches capped at 20 turns and 8 Gemini
+// The client sends long scripts in batches capped at 60 turns and 8 Gemini
 // requests, leaving room under the 10 requests/minute quota.
-const MAX_TURNS = 20;
+const MAX_TURNS = 60;
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const GEMINI_CONCURRENCY = 5;
 const GEMINI_MAX_RETRIES = 4;

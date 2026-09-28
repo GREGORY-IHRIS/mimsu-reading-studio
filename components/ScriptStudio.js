@@ -114,15 +114,16 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
       let cache = null;
       let cacheWorking = false;
       try {
-        const legacyCache = await loadSegmentCache(JSON.stringify({ version: 1, turns }));
-        if (await legacyCache?.get(0)) {
-          // Finish an existing paid job with the old boundaries so cached WAV
-          // clips remain aligned with the remaining turns.
-          batches = makeBatches(turns, { maxTurns: 8, maxChars: 400 });
-          cache = legacyCache;
-        } else {
-          cache = await prepareSegmentCache(JSON.stringify({ version: 2, turns }));
+        for (const version of [2, 1]) {
+          const previous = await loadSegmentCache(JSON.stringify({ version, turns }));
+          if (await previous?.get(0)) {
+            // Preserve paid audio already generated with the previous layout.
+            batches = makeBatches(turns, { layout: version });
+            cache = previous;
+            break;
+          }
         }
+        if (!cache) cache = await prepareSegmentCache(JSON.stringify({ version: 3, turns }));
         cacheWorking = Boolean(cache);
       } catch {
         // Browser storage may be disabled; generation still works this session.
