@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../lib/authOptions";
 import { concatWavBuffers } from "../../../lib/wav";
 import { addHistoryEntry, saveAudio } from "../../../lib/store";
-import { retryHintMs } from "../../../lib/scriptBatches";
+import { makeSpeechGroups, retryHintMs } from "../../../lib/scriptBatches";
 
 const SCRIPT_MODES = new Set(["multi", "save", "record"]);
 
@@ -111,6 +111,39 @@ function buildSpeechRequest({ text, voice, style }) {
     ],
     response_format: { type: "audio" },
     generation_config: { speech_config: [{ voice }] },
+  };
+}
+
+function buildGroupRequest(group) {
+  const speakers = [...new Map(group.map((turn) => [turn.speaker, turn.voice]))];
+  if (speakers.length === 1) {
+    return buildSpeechRequest({
+      text: group.map((turn) => turn.text).join("\n\n"),
+      voice: speakers[0][1],
+      style: group[0].style,
+    });
+  }
+  return {
+    model: "gemini-3.8-flash-tts",
+    input: [{
+      type: "user_input",
+      content: group.map((turn) => ({
+        type: "text",
+        text: turn.text,
+        annotations: [{
+          type: "speech_metadata",
+          speaker: turn.speaker,
+          ...(turn.style ? { style: turn.style } : {}),
+        }],
+      })),
+    }],
+    response_format: { type: "audio" },
+    generation_config: {
+      speech_config: {
+        mode: "conversational",
+        speakers: speakers.map(([speaker, voice]) => ({ speaker, voice })),
+      },
+    },
   };
 }
 
@@ -230,25 +263,38 @@ async function handleMulti(body, apiKey) {
     }
   }
 
-  // Gemini's native multi-speaker ("conversational") mode caps out at 2
-  // speakers per call — undocumented, found by testing; 3+ returns a plain
-  // 400 "Invalid input received." A narrator + 2 characters already breaks
-  // that, so instead each line is generated with its own single-speaker call
-  // (with limited concurrency) and the resulting WAV clips are stitched together below.
+  // Group adjacent lines into single-speaker passages or two-speaker
+  // conversations. Custom voices and groups of 3+ speakers remain separate.
+  const groups = makeSpeechGroups(turns);
+  let nextLine = 0;
+  const indexedGroups = groups.map((group) => {
+    const start = nextLine;
+    nextLine += group.length;
+    return { group, start, end: nextLine - 1 };
+  });
   const deadline = Date.now() + GEMINI_RETRY_DEADLINE_MS;
   let clips;
   try {
     clips = await mapWithConcurrency(
-      turns,
-      async (t, i) => {
+      indexedGroups,
+      async ({ group, start, end }) => {
         try {
-          return await callGeminiWithRetry(
-            buildSpeechRequest({ text: t.text, voice: t.voice, style: t.style }),
-            apiKey,
-            deadline
-          );
+          try {
+            return await callGeminiWithRetry(buildGroupRequest(group), apiKey, deadline);
+          } catch (error) {
+            if (group.length < 2 || error.status !== 400) throw error;
+            // If Gemini rejects a grouped voice combination, preserve the
+            // old per-line path so this script can still finish.
+            const individual = [];
+            for (const turn of group) {
+              individual.push(await callGeminiWithRetry(buildSpeechRequest(turn), apiKey, deadline));
+            }
+            const joined = concatWavBuffers(individual.map((clip) => Buffer.from(clip.base64, "base64")), 250);
+            return { base64: joined.toString("base64"), mimeType: "audio/wav" };
+          }
         } catch (e) {
-          const error = new Error(`${i + 1}번째 줄(${t.speaker}) 생성 실패: ${e.message}`);
+          const place = start === end ? `${start + 1}번째 줄(${group[0].speaker})` : `${start + 1}~${end + 1}번째 줄`;
+          const error = new Error(`${place} 생성 실패: ${e.message}`);
           error.status = e.status;
           throw error;
         }
@@ -325,9 +371,7 @@ export async function POST(request) {
 
   // Previews (voice try-outs in the cast manager) are throwaway — just hand
   // back the audio inline instead of cluttering the user's saved history.
-  if (body.preview) {
-    return NextResponse.json({ audioBase64: result.audio.base64, mimeType: result.audio.mimeType });
-  }
+  if (body.preview) return streamPreview(result.audio);
 
   const email = session.user.email;
   const id = crypto.randomUUID();
@@ -345,6 +389,20 @@ export async function POST(request) {
       { status: 502 }
     );
   }
+}
+
+function streamPreview(audio) {
+  const json = JSON.stringify({ audioBase64: audio.base64, mimeType: audio.mimeType });
+  const encoder = new TextEncoder();
+  let offset = 0;
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (offset >= json.length) return controller.close();
+      controller.enqueue(encoder.encode(json.slice(offset, offset + 64 * 1024)));
+      offset += 64 * 1024;
+    },
+  });
+  return new Response(stream, { headers: { "Content-Type": "application/json; charset=utf-8" } });
 }
 
 function buildEntry(id, body, mimeType) {

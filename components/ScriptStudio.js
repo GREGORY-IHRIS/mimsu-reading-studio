@@ -6,7 +6,8 @@ import TagToolbar from "./TagToolbar";
 import { parseScript, nextAvailableVoice } from "../lib/script";
 import { combineAndSave, generateSegment } from "../lib/audio";
 import { buildVoiceStyle } from "../lib/voiceStyle";
-import { makeBatches, requestCapacity, retryHintMs } from "../lib/scriptBatches";
+import { makeBatches, makeSpeechGroups, requestCapacity, retryHintMs } from "../lib/scriptBatches";
+import { prepareSegmentCache } from "../lib/segmentCache";
 
 const MAX_CHARS = 8000;
 const MAX_BATCH_RETRIES = 3;
@@ -26,6 +27,19 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
   const textareaRef = useRef(null);
 
   const preview = useMemo(() => parseScript(scriptText, cast), [scriptText, cast]);
+  const estimatedRequests = useMemo(() => {
+    if (!preview.turns.length || !voices.length) return 0;
+    const byName = new Map(cast.map((c) => [c.name.toLowerCase(), c]));
+    const turns = preview.turns.map((turn) => {
+      const character = byName.get(turn.speaker.toLowerCase());
+      return {
+        ...turn,
+        voice: character?.voice || voices[0].id,
+        style: overrideStyle.trim() || buildVoiceStyle(character),
+      };
+    });
+    return makeBatches(turns).reduce((count, batch) => count + makeSpeechGroups(batch.turns).length, 0);
+  }, [preview, cast, voices, overrideStyle]);
 
   async function handleAutoFormat() {
     setError("");
@@ -98,6 +112,14 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
       const batches = makeBatches(turns);
       const total = batches.length;
       const clips = [];
+      let cache = null;
+      let cacheWorking = false;
+      try {
+        cache = await prepareSegmentCache(JSON.stringify({ version: 1, turns }));
+        cacheWorking = Boolean(cache);
+      } catch {
+        // Browser storage may be disabled; generation still works this session.
+      }
       let recentRequests = [];
       async function waitWithProgress(ms) {
         const until = Date.now() + ms;
@@ -118,12 +140,20 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
         recentRequests.push(...Array(count).fill(Date.now()));
       }
       setProgress({ done: 0, total });
-      for (const batch of batches) {
+      for (const [batchIndex, batch] of batches.entries()) {
+        let cached;
+        try { cached = await cache?.get(batchIndex); } catch { cacheWorking = false; }
+        if (cached) {
+          clips.push(cached);
+          setProgress({ done: clips.length, total });
+          continue;
+        }
         for (let attempt = 0; ; attempt++) {
-          await waitForCapacity(batch.turns.length);
+          await waitForCapacity(makeSpeechGroups(batch.turns).length);
           try {
             const segment = await generateSegment({ mode: "multi", turns: batch.turns });
             clips.push(segment.base64);
+            try { await cache?.put(batchIndex, segment.base64); } catch { cacheWorking = false; }
             break;
           } catch (e) {
             if (e.status !== 429 || attempt >= MAX_BATCH_RETRIES) {
@@ -132,7 +162,10 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
             const retryAfter = retryHintMs(e.message);
             if (/requests per day/i.test(e.message) || (retryAfter != null && retryAfter > 5 * 60_000)) {
               const when = retryAfter == null ? "한도가 갱신된 뒤" : `약 ${Math.ceil(retryAfter / 60_000)}분 뒤`;
-              throw new Error(`Gemini의 일일 생성 한도에 도달했어요. ${when} 다시 시도해주세요. 이미 생성한 구간은 아직 저장되지 않았어요.`);
+              const resume = cacheWorking
+                ? "완료된 구간은 이 브라우저에 임시 저장했어요. 같은 대본과 목소리 설정으로 다시 누르면 이어집니다."
+                : "브라우저 임시 저장을 사용할 수 없어 다음에는 처음부터 생성해야 해요.";
+              throw new Error(`Gemini의 일일 생성 한도에 도달했어요. ${when} 다시 시도해주세요. ${resume}`);
             }
             await waitWithProgress((retryAfter ?? 60_000) + 2000);
           }
@@ -141,6 +174,7 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
       }
       setProgress({ done: total, total, saving: true });
       const history = await combineAndSave(clips, turns);
+      try { await cache?.clear(); } catch { /* Saved history is still complete. */ }
       onHistory(history);
     } catch (e) {
       setError(e.message);
@@ -226,6 +260,7 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
         </button>
         <p className="hint">
           한 번에 {MAX_CHARS}자까지 가능해요. 대사가 많으면 자동으로 여러 구간으로 나눠서 순서대로 생성해요.
+          {estimatedRequests > 0 && ` 현재 대본은 Gemini 요청 약 ${estimatedRequests}회가 필요해요.`}
         </p>
       </div>
     </>
