@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../lib/authOptions";
 import { concatWavBuffers } from "../../../lib/wav";
 import { addHistoryEntry, saveAudio } from "../../../lib/store";
+import { retryHintMs } from "../../../lib/scriptBatches";
 
 const SCRIPT_MODES = new Set(["multi", "save", "record"]);
 
@@ -148,10 +149,7 @@ async function callGeminiWithRetry(requestBody, apiKey, deadline) {
     } catch (error) {
       if (error.status !== 429 || attempt >= GEMINI_MAX_RETRIES) throw error;
 
-      const hint = error.message.match(/retry\s+in\s+([\d.]+)\s*(ms|milliseconds?|s|seconds?)\b/i);
-      const delay = hint
-        ? Number(hint[1]) * (hint[2].toLowerCase().startsWith("m") ? 1 : 1000)
-        : 1000 * 2 ** attempt;
+      const delay = retryHintMs(error.message) ?? 1000 * 2 ** attempt;
       if (!Number.isFinite(delay) || delay < 0 || Date.now() + delay >= deadline) {
         throw error;
       }

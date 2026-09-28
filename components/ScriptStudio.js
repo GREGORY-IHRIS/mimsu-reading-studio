@@ -129,7 +129,12 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
             if (e.status !== 429 || attempt >= MAX_BATCH_RETRIES) {
               throw new Error(`${batch.start + 1}~${batch.end + 1}번째 줄 구간 생성 실패: ${e.message}`);
             }
-            await waitWithProgress((retryHintMs(e.message) ?? 60_000) + 2000);
+            const retryAfter = retryHintMs(e.message);
+            if (/requests per day/i.test(e.message) || (retryAfter != null && retryAfter > 5 * 60_000)) {
+              const when = retryAfter == null ? "한도가 갱신된 뒤" : `약 ${Math.ceil(retryAfter / 60_000)}분 뒤`;
+              throw new Error(`Gemini의 일일 생성 한도에 도달했어요. ${when} 다시 시도해주세요. 이미 생성한 구간은 아직 저장되지 않았어요.`);
+            }
+            await waitWithProgress((retryAfter ?? 60_000) + 2000);
           }
         }
         setProgress({ done: clips.length, total });
