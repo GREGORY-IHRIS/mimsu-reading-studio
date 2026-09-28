@@ -10,7 +10,15 @@ const SAMPLE_TEXT = "안녕하세요, 목소리를 확인하고 있어요.";
 export default function CastManager({ cast, setCast, voices }) {
   const [newName, setNewName] = useState("");
   const [newVoice, setNewVoice] = useState(() => nextAvailableVoice(voices, cast));
+  const [voiceTouched, setVoiceTouched] = useState(false);
   const [previewing, setPreviewing] = useState(null);
+
+  function handleNameChange(value) {
+    setNewName(value);
+    if (!voiceTouched) {
+      setNewVoice(nextAvailableVoice(voices, cast, value));
+    }
+  }
 
   function updateCast(index, patch) {
     setCast((prev) => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)));
@@ -29,6 +37,7 @@ export default function CastManager({ cast, setCast, voices }) {
     const nextCast = [...cast, { name, voice: newVoice, style: "" }];
     setCast(nextCast);
     setNewName("");
+    setVoiceTouched(false);
     setNewVoice(nextAvailableVoice(voices, nextCast));
   }
 
@@ -85,11 +94,18 @@ export default function CastManager({ cast, setCast, voices }) {
       <div className="cast-row cast-row-new">
         <input
           className="cast-name"
-          placeholder="새 등장인물 이름"
+          placeholder="새 등장인물 이름 (예: 할머니, 엄마)"
           value={newName}
-          onChange={(e) => setNewName(e.target.value)}
+          onChange={(e) => handleNameChange(e.target.value)}
         />
-        <VoiceSelect voices={voices} value={newVoice} onChange={setNewVoice} />
+        <VoiceSelect
+          voices={voices}
+          value={newVoice}
+          onChange={(v) => {
+            setVoiceTouched(true);
+            setNewVoice(v);
+          }}
+        />
         <button type="button" className="cast-add" onClick={addCast} disabled={!newName.trim()}>
           + 추가
         </button>

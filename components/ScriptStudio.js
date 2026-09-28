@@ -66,7 +66,7 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
     if (parsed.unknownSpeakers.length > 0) {
       const additions = [];
       for (const name of parsed.unknownSpeakers) {
-        const voice = nextAvailableVoice(voices, [...workingCast, ...additions]);
+        const voice = nextAvailableVoice(voices, [...workingCast, ...additions], name);
         additions.push({ name, voice, style: "" });
       }
       workingCast = [...workingCast, ...additions];
