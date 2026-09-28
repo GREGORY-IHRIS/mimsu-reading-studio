@@ -255,6 +255,9 @@ export async function POST(request) {
       snippet: buildSnippet(body),
       createdAt: new Date().toISOString(),
       mimeType: result.audio.mimeType,
+      name: null,
+      pinned: false,
+      folder: null,
     };
     const history = await addHistoryEntry(email, entry);
 

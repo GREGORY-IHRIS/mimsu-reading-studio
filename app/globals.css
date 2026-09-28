@@ -260,15 +260,132 @@ select {
 }
 
 .history-item {
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-  margin-top: 14px;
+  background: #fffefb;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-top: 12px;
 }
 
 .history-item p {
   margin: 0 0 8px;
   color: var(--ink-soft);
   font-size: 0.9rem;
+}
+
+/* Folder tabs */
+
+.folder-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.folder-tab {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.folder-tab:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.folder-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* History item internals */
+
+.history-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pin-btn {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  font-size: 1.2rem;
+  line-height: 1;
+  color: var(--border);
+  padding: 4px;
+}
+
+.pin-btn.active {
+  color: var(--accent);
+}
+
+.pin-btn:hover {
+  color: var(--accent-dark);
+}
+
+.history-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.history-name-input:hover {
+  border-color: var(--border);
+}
+
+.history-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.history-delete-btn {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  font-size: 1rem;
+  padding: 4px 8px;
+  color: var(--ink-soft);
+  opacity: 0.6;
+}
+
+.history-delete-btn:hover {
+  opacity: 1;
+  color: var(--error);
+}
+
+.history-meta {
+  margin-top: 2px;
+}
+
+.folder-select {
+  width: auto;
+  max-width: 220px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  margin-bottom: 10px;
+}
+
+.folder-new-input {
+  width: auto;
+  max-width: 220px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  margin-bottom: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: #fffefb;
 }
 
 .hint {

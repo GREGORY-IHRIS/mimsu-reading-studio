@@ -97,7 +97,7 @@ export default function StudioClient({ userEmail, userName }) {
         </>
       )}
 
-      <HistoryList history={history} />
+      <HistoryList history={history} onHistory={setHistory} />
     </div>
   );
 }
