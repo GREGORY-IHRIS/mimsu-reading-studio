@@ -193,18 +193,26 @@ export async function POST(request) {
   const email = session.user.email;
   const id = crypto.randomUUID();
   const buffer = Buffer.from(result.audio.base64, "base64");
-  await saveAudio(email, id, buffer, result.audio.mimeType);
 
-  const entry = {
-    id,
-    label: body.mode === "multi" ? `대본 · 등장인물 ${new Set(body.turns.map((t) => t.speaker)).size}명` : `${body.voice}${body.style ? ` · ${body.style}` : ""}`,
-    snippet: buildSnippet(body),
-    createdAt: new Date().toISOString(),
-    mimeType: result.audio.mimeType,
-  };
-  const history = await addHistoryEntry(email, entry);
+  try {
+    await saveAudio(email, id, buffer, result.audio.mimeType);
 
-  return NextResponse.json({ entry, history });
+    const entry = {
+      id,
+      label: body.mode === "multi" ? `대본 · 등장인물 ${new Set(body.turns.map((t) => t.speaker)).size}명` : `${body.voice}${body.style ? ` · ${body.style}` : ""}`,
+      snippet: buildSnippet(body),
+      createdAt: new Date().toISOString(),
+      mimeType: result.audio.mimeType,
+    };
+    const history = await addHistoryEntry(email, entry);
+
+    return NextResponse.json({ entry, history });
+  } catch (e) {
+    return NextResponse.json(
+      { error: `음성은 만들어졌지만 저장에 실패했어요: ${e.message || "알 수 없는 오류"}` },
+      { status: 502 }
+    );
+  }
 }
 
 function buildSnippet(body) {
