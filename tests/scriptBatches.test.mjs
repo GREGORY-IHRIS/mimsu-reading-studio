@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { makeBatches, makeSpeechGroups, requestCapacity, retryHintMs } from "../lib/scriptBatches.js";
+import { BATCH_CHARS, BATCH_SIZE, REQUESTS_PER_WINDOW, makeBatches, makeSpeechGroups, requestCapacity, retryHintMs } from "../lib/scriptBatches.js";
 
 const turn = (speaker, voice, text, style = "") => ({ speaker, voice, text, style });
 
@@ -31,9 +31,30 @@ test("long scripts retain all text and use fewer requests than lines", () => {
   const batches = makeBatches(turns);
   const generated = batches.flatMap((batch) => batch.turns);
   assert.equal(generated.reduce((sum, item) => sum + item.text.length, 0), 8000);
-  assert.ok(batches.every((batch) => batch.turns.reduce((sum, item) => sum + item.text.length, 0) <= 400));
+  assert.ok(batches.every((batch) => batch.turns.reduce((sum, item) => sum + item.text.length, 0) <= BATCH_CHARS));
+  assert.ok(batches.every((batch) => batch.turns.length <= BATCH_SIZE));
+  assert.ok(batches.every((batch) => makeSpeechGroups(batch.turns).length <= REQUESTS_PER_WINDOW));
   const calls = batches.reduce((sum, batch) => sum + makeSpeechGroups(batch.turns).length, 0);
   assert.ok(calls < turns.length, `expected fewer than ${turns.length} calls, got ${calls}`);
+});
+
+test("a short four-speaker scene uses fewer requests without dropping voices", () => {
+  const turns = Array.from({ length: 8 }, (_, i) =>
+    turn(`화자${i % 4}`, `Voice${i % 4}`, "가".repeat(80))
+  );
+  const batches = makeBatches(turns);
+  assert.equal(batches.length, 1);
+  assert.equal(batches.reduce((sum, batch) => sum + makeSpeechGroups(batch.turns).length, 0), 4);
+  const legacyBatches = makeBatches(turns, { maxTurns: 8, maxChars: 400 });
+  assert.equal(legacyBatches.reduce((sum, batch) => sum + makeSpeechGroups(batch.turns).length, 0), 5);
+});
+
+test("a dense scene never asks the client to reserve more than eight requests", () => {
+  const turns = Array.from({ length: 20 }, (_, i) =>
+    turn(`화자${i}`, `Voice${i}`, "가".repeat(10))
+  );
+  const batches = makeBatches(turns);
+  assert.deepEqual(batches.map((batch) => makeSpeechGroups(batch.turns).length), [8, 2]);
 });
 
 test("minute window and Gemini retry hints remain usable", () => {

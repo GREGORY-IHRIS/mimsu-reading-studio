@@ -7,27 +7,25 @@ import { makeSpeechGroups, retryHintMs } from "../../../lib/scriptBatches";
 
 const SCRIPT_MODES = new Set(["multi", "save", "record"]);
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Gemini itself accepts far more text per call than these numbers suggest
-// (tested up to ~4800 chars with no rejection) — the real ceiling is our own
-// Vercel function's 60s timeout below. A real (non-repetitive) ~1000-char
-// Korean passage measured ~45s wall-clock to synthesize, so anything much
-// longer than that in a single call risks timing out mid-request. Rather
-// than cap total length tightly, long single-voice text is split into
-// SINGLE_CHUNK_SIZE-sized pieces and generated with limited concurrency,
-// as handleMulti does per script line — see splitIntoChunks() below.
+// (tested up to ~4800 chars with no rejection) — generation time and output
+// size are the practical limits. A real (non-repetitive) ~1000-char Korean
+// passage measured ~45s wall-clock to synthesize. Long single-voice text is
+// still split into SINGLE_CHUNK_SIZE-sized pieces and generated with limited
+// concurrency — see splitIntoChunks() below.
 const SINGLE_CHUNK_SIZE = 1000;
 const MAX_CHARS_SINGLE = 8000;
 const MAX_CHARS_PER_TURN = 1000;
 const MAX_CHARS_SCRIPT = 8000;
-// Keep each call within the 10 requests/minute quota and Vercel's 60s budget;
-// the client sends longer scripts as multiple batches.
-const MAX_TURNS = 10;
+// The client sends long scripts in batches capped at 20 turns and 8 Gemini
+// requests, leaving room under the 10 requests/minute quota.
+const MAX_TURNS = 20;
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const GEMINI_CONCURRENCY = 5;
 const GEMINI_MAX_RETRIES = 4;
-const GEMINI_RETRY_DEADLINE_MS = 50_000;
+const GEMINI_RETRY_DEADLINE_MS = 270_000;
 
 // Splits long text on paragraph breaks first, falling back to sentence
 // breaks for any paragraph that's still too long on its own.

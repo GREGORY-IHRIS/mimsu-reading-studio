@@ -7,7 +7,7 @@ import { parseScript, nextAvailableVoice } from "../lib/script";
 import { combineAndSave, generateSegment } from "../lib/audio";
 import { buildVoiceStyle } from "../lib/voiceStyle";
 import { makeBatches, makeSpeechGroups, requestCapacity, retryHintMs } from "../lib/scriptBatches";
-import { prepareSegmentCache } from "../lib/segmentCache";
+import { loadSegmentCache, prepareSegmentCache } from "../lib/segmentCache";
 
 const MAX_CHARS = 8000;
 const MAX_BATCH_RETRIES = 3;
@@ -109,17 +109,25 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
 
     setLoading(true);
     try {
-      const batches = makeBatches(turns);
-      const total = batches.length;
+      let batches = makeBatches(turns);
       const clips = [];
       let cache = null;
       let cacheWorking = false;
       try {
-        cache = await prepareSegmentCache(JSON.stringify({ version: 1, turns }));
+        const legacyCache = await loadSegmentCache(JSON.stringify({ version: 1, turns }));
+        if (await legacyCache?.get(0)) {
+          // Finish an existing paid job with the old boundaries so cached WAV
+          // clips remain aligned with the remaining turns.
+          batches = makeBatches(turns, { maxTurns: 8, maxChars: 400 });
+          cache = legacyCache;
+        } else {
+          cache = await prepareSegmentCache(JSON.stringify({ version: 2, turns }));
+        }
         cacheWorking = Boolean(cache);
       } catch {
         // Browser storage may be disabled; generation still works this session.
       }
+      const total = batches.length;
       let recentRequests = [];
       async function waitWithProgress(ms) {
         const until = Date.now() + ms;
