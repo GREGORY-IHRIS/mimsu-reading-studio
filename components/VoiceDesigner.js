@@ -183,7 +183,7 @@ export default function VoiceDesigner({ onCreated }) {
           {error && <p className="error">{error}</p>}
 
           <button type="button" className="generate-button" disabled={busy || !canCreate} onClick={handleCreate}>
-            {busy ? "만드는 중..." : "목소리 만들기"}
+            {busy ? "만드는 중..." : "목소리 만들기 (Gemini 요청 1회 사용)"}
           </button>
 
           {sampleUrl && (

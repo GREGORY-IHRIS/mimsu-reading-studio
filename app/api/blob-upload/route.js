@@ -1,13 +1,13 @@
 import { handleUpload } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../../lib/authOptions";
-import { usingBlob, userKeyFor } from "../../../lib/store";
+import { authOptions } from "../../../lib/server/authOptions.js";
+import { usingBlob, userKeyFor } from "../../../lib/server/store.js";
 
 // Lets the browser upload an already-finished audio file straight to Vercel
 // Blob, so its size is never bounded by a serverless function's request/
 // response body limit (4.5MB) the way routing it through /api/tts would be.
-// See lib/audio.js's saveFinishedAudio() for the client side of this.
+// See lib/client/api.js's saveFinishedAudio() for the client side of this.
 
 export async function GET() {
   const session = await getServerSession(authOptions);

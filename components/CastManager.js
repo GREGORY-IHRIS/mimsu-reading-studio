@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { nextAvailableVoice } from "../lib/script";
-import { previewSpeech } from "../lib/audio";
-import { buildVoiceStyle } from "../lib/voiceStyle";
+import { useRef, useState } from "react";
+import { nextAvailableVoice } from "../lib/shared/script.js";
+import { previewSpeech } from "../lib/client/api.js";
+import { buildVoiceStyle } from "../lib/shared/voiceStyle.js";
 import VoiceSelect from "./VoiceSelect";
 
 const SAMPLE_TEXT = "안녕하세요, 목소리를 확인하고 있어요.";
@@ -16,6 +16,9 @@ export default function CastManager({ cast, setCast, voices }) {
   const [newClarity, setNewClarity] = useState("");
   const [newStyle, setNewStyle] = useState("");
   const [previewing, setPreviewing] = useState(null);
+  const [previewError, setPreviewError] = useState("");
+  // Each preview is a Gemini request, so a voice that was already sampled is replayed from memory.
+  const previewUrls = useRef(new Map());
 
   function handleNameChange(value) {
     setNewName(value);
@@ -50,11 +53,17 @@ export default function CastManager({ cast, setCast, voices }) {
 
   async function preview(voice, style, key) {
     setPreviewing(key);
+    setPreviewError("");
     try {
-      const url = await previewSpeech({ text: SAMPLE_TEXT, voice, style });
+      const cacheKey = `${voice}|${style}`;
+      let url = previewUrls.current.get(cacheKey);
+      if (!url) {
+        url = await previewSpeech({ text: SAMPLE_TEXT, voice, style });
+        previewUrls.current.set(cacheKey, url);
+      }
       new Audio(url).play();
-    } catch {
-      // silent — this is just a convenience preview
+    } catch (e) {
+      setPreviewError(e.message);
     } finally {
       setPreviewing(null);
     }
@@ -118,6 +127,10 @@ export default function CastManager({ cast, setCast, voices }) {
           )}
         </div>
       ))}
+      {previewError && <p className="error" style={{ marginTop: 8 }}>{previewError}</p>}
+      <p className="hint">
+        "미리듣기"는 처음 들을 때마다 Gemini 요청을 1회 써요 (같은 목소리를 다시 들을 땐 쓰지 않아요).
+      </p>
 
       <div className="cast-create">
         <label className="field-label" htmlFor="new-cast-name">새 등장인물 추가</label>

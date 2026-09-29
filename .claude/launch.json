@@ -4,8 +4,19 @@
     {
       "name": "gemini-tts-studio",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000
+    },
+    {
+      "name": "gemini-tts-mock",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/dev-mock.mjs"
+      ],
+      "port": 3100
     }
   ]
 }

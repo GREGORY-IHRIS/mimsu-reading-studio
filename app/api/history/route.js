@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../../lib/authOptions";
-import { getUserData } from "../../../lib/store";
+import { requireSession } from "../../../lib/server/http.js";
+import { getUserData, libraryOf } from "../../../lib/server/store.js";
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
+  const { session, response } = await requireSession();
+  if (response) return response;
 
   const data = await getUserData(session.user.email);
-  return NextResponse.json({ history: data.history });
+  return NextResponse.json(libraryOf(data));
 }

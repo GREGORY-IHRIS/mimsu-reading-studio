@@ -2,44 +2,49 @@
 
 import { useMemo, useRef, useState } from "react";
 import CastManager from "./CastManager";
+import GenerateButton from "./GenerateButton";
+import QuotaEstimate from "./QuotaEstimate";
 import TagToolbar from "./TagToolbar";
-import { parseScript, nextAvailableVoice } from "../lib/script";
-import { combineAndSave, generateSegment } from "../lib/audio";
-import { buildVoiceStyle } from "../lib/voiceStyle";
-import { makeBatches, makeSpeechGroups, requestCapacity, retryHintMs } from "../lib/scriptBatches";
-import { loadSegmentCache, prepareSegmentCache } from "../lib/segmentCache";
+import useSpeechGeneration from "./useSpeechGeneration";
+import { formatScript } from "../lib/client/api.js";
+import { scriptEntryInfo } from "../lib/client/generate.js";
+import { MAX_TEXT_CHARS } from "../lib/shared/config.js";
+import { nextAvailableVoice, parseScript } from "../lib/shared/script.js";
+import { buildVoiceStyle } from "../lib/shared/voiceStyle.js";
 
-const MAX_CHARS = 8000;
-const MAX_BATCH_RETRIES = 3;
 const EXAMPLE = `밤안개가 골목 끝까지 자욱하게 내려앉았다.
 지우: 누구야...? 거기 누구 있어?
 그림자가 천천히 다가왔다.
 민준: 나야, 놀라지 마.`;
 
-export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
+// Attaches each parsed line to its cast member's voice and delivery style.
+function toTurns(parsedTurns, cast, fallbackVoice, overrideStyle) {
+  const byName = new Map(cast.map((c) => [c.name.toLowerCase(), c]));
+  return parsedTurns.map((turn) => {
+    const character = byName.get(turn.speaker.toLowerCase());
+    return {
+      speaker: turn.speaker,
+      voice: character?.voice || fallbackVoice,
+      style: overrideStyle.trim() || buildVoiceStyle(character),
+      text: turn.text,
+    };
+  });
+}
+
+export default function ScriptStudio({ cast, setCast, voices, onLibrary }) {
   const [scriptText, setScriptText] = useState("");
   const [overrideStyle, setOverrideStyle] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(null);
   const [formatting, setFormatting] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const textareaRef = useRef(null);
+  const generation = useSpeechGeneration(onLibrary);
 
   const preview = useMemo(() => parseScript(scriptText, cast), [scriptText, cast]);
-  const estimatedRequests = useMemo(() => {
-    if (!preview.turns.length || !voices.length) return 0;
-    const byName = new Map(cast.map((c) => [c.name.toLowerCase(), c]));
-    const turns = preview.turns.map((turn) => {
-      const character = byName.get(turn.speaker.toLowerCase());
-      return {
-        ...turn,
-        voice: character?.voice || voices[0].id,
-        style: overrideStyle.trim() || buildVoiceStyle(character),
-      };
-    });
-    return makeBatches(turns).reduce((count, batch) => count + makeSpeechGroups(batch.turns).length, 0);
-  }, [preview, cast, voices, overrideStyle]);
+  const estimateTurns = useMemo(
+    () => (voices.length ? toTurns(preview.turns, cast, voices[0].id, overrideStyle) : []),
+    [preview, cast, voices, overrideStyle]
+  );
 
   async function handleAutoFormat() {
     setError("");
@@ -50,14 +55,7 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
     }
     setFormatting(true);
     try {
-      const res = await fetch("/api/script/format", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: scriptText, castNames: cast.map((c) => c.name) }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "정리에 실패했어요.");
-      setScriptText(data.text);
+      setScriptText(await formatScript(scriptText, cast.map((c) => c.name)));
       setNote("AI가 대사와 나레이션을 구분해봤어요 — 생성 전에 한 번 훑어보고 틀린 부분은 직접 고쳐주세요.");
     } catch (e) {
       setError(e.message);
@@ -66,7 +64,7 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
     }
   }
 
-  async function handleGenerate() {
+  function handleGenerate() {
     setError("");
     setNote("");
     if (!scriptText.trim()) {
@@ -96,104 +94,12 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
       );
     }
 
-    const castByName = new Map(workingCast.map((c) => [c.name.toLowerCase(), c]));
-    const turns = parsed.turns.map((t) => {
-      const c = castByName.get(t.speaker.toLowerCase());
-      return {
-        speaker: t.speaker,
-        voice: c?.voice || voices[0].id,
-        style: overrideStyle.trim() || buildVoiceStyle(c),
-        text: t.text,
-      };
-    });
-
-    setLoading(true);
-    try {
-      let batches = makeBatches(turns);
-      const clips = [];
-      let cache = null;
-      let cacheWorking = false;
-      try {
-        for (const version of [2, 1]) {
-          const previous = await loadSegmentCache(JSON.stringify({ version, turns }));
-          if (await previous?.get(0)) {
-            // Preserve paid audio already generated with the previous layout.
-            batches = makeBatches(turns, { layout: version });
-            cache = previous;
-            break;
-          }
-        }
-        if (!cache) cache = await prepareSegmentCache(JSON.stringify({ version: 3, turns }));
-        cacheWorking = Boolean(cache);
-      } catch {
-        // Browser storage may be disabled; generation still works this session.
-      }
-      const total = batches.length;
-      let recentRequests = [];
-      async function waitWithProgress(ms) {
-        const until = Date.now() + ms;
-        while (Date.now() < until) {
-          const remaining = until - Date.now();
-          setProgress({ done: clips.length, total, waitSeconds: Math.ceil(remaining / 1000) });
-          await new Promise((resolve) => setTimeout(resolve, Math.min(1000, remaining)));
-        }
-        setProgress({ done: clips.length, total });
-      }
-      async function waitForCapacity(count) {
-        for (;;) {
-          const capacity = requestCapacity(recentRequests, count);
-          recentRequests = capacity.active;
-          if (capacity.waitMs === 0) break;
-          await waitWithProgress(capacity.waitMs);
-        }
-        recentRequests.push(...Array(count).fill(Date.now()));
-      }
-      setProgress({ done: 0, total });
-      for (const [batchIndex, batch] of batches.entries()) {
-        let cached;
-        try { cached = await cache?.get(batchIndex); } catch { cacheWorking = false; }
-        if (cached) {
-          clips.push(cached);
-          setProgress({ done: clips.length, total });
-          continue;
-        }
-        for (let attempt = 0; ; attempt++) {
-          await waitForCapacity(makeSpeechGroups(batch.turns).length);
-          try {
-            const segment = await generateSegment({ mode: "multi", turns: batch.turns });
-            clips.push(segment.base64);
-            try { await cache?.put(batchIndex, segment.base64); } catch { cacheWorking = false; }
-            break;
-          } catch (e) {
-            if (e.status !== 429 || attempt >= MAX_BATCH_RETRIES) {
-              throw new Error(`${batch.start + 1}~${batch.end + 1}번째 줄 구간 생성 실패: ${e.message}`);
-            }
-            const retryAfter = retryHintMs(e.message);
-            if (/requests per day/i.test(e.message) || (retryAfter != null && retryAfter > 5 * 60_000)) {
-              const when = retryAfter == null ? "한도가 갱신된 뒤" : `약 ${Math.ceil(retryAfter / 60_000)}분 뒤`;
-              const resume = cacheWorking
-                ? "완료된 구간은 이 브라우저에 임시 저장했어요. 같은 대본과 목소리 설정으로 다시 누르면 이어집니다."
-                : "브라우저 임시 저장을 사용할 수 없어 다음에는 처음부터 생성해야 해요.";
-              throw new Error(`Gemini의 일일 생성 한도에 도달했어요. ${when} 다시 시도해주세요. ${resume}`);
-            }
-            await waitWithProgress((retryAfter ?? 60_000) + 2000);
-          }
-        }
-        setProgress({ done: clips.length, total });
-      }
-      setProgress({ done: total, total, saving: true });
-      const history = await combineAndSave(clips, turns);
-      try { await cache?.clear(); } catch { /* Saved history is still complete. */ }
-      onHistory(history);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setProgress(null);
-      setLoading(false);
-    }
+    const turns = toTurns(parsed.turns, workingCast, voices[0].id, overrideStyle);
+    generation.run({ turns, purpose: "script", entry: scriptEntryInfo(turns) });
   }
 
   const detectedSpeakers = Array.from(new Set(preview.turns.map((t) => t.speaker)));
+  const shownError = error || generation.error;
 
   return (
     <>
@@ -203,14 +109,14 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
         <label className="field-label" htmlFor="script">
           대본{" "}
           <span className="char-count">
-            ({scriptText.length}/{MAX_CHARS}자)
+            ({scriptText.length}/{MAX_TEXT_CHARS}자)
           </span>
         </label>
         <textarea
           id="script"
           ref={textareaRef}
           value={scriptText}
-          maxLength={MAX_CHARS}
+          maxLength={MAX_TEXT_CHARS}
           onChange={(e) => setScriptText(e.target.value)}
           placeholder={`"이름: 대사" 형식으로 한 줄씩 적어주세요. 예:\n\n${EXAMPLE}`}
         />
@@ -250,26 +156,24 @@ export default function ScriptStudio({ cast, setCast, voices, onHistory }) {
         </div>
 
         {note && <p className="hint" style={{ marginTop: 12 }}>{note}</p>}
-        {error && (
+        {shownError && (
           <p className="error" style={{ marginTop: 16 }}>
-            {error}
+            {shownError}
           </p>
         )}
 
-        <button className="generate-button" onClick={handleGenerate} disabled={loading}>
-          {loading
-            ? progress
-              ? progress.waitSeconds
-                ? `요청 제한 대기 중... 약 ${progress.waitSeconds}초 (${progress.done}/${progress.total} 구간)`
-                : progress.saving
-                  ? "음성 합치고 저장하는 중..."
-                  : `생성 중... (${progress.done}/${progress.total} 구간)`
-              : "만드는 중... (등장인물이 많으면 조금 걸려요)"
-            : "대본 전체 듣기"}
-        </button>
+        <GenerateButton
+          idleLabel="대본 전체 듣기"
+          loading={generation.loading}
+          progress={generation.progress}
+          onGenerate={handleGenerate}
+          onStop={generation.stop}
+        />
+        <QuotaEstimate turns={estimateTurns} busy={generation.loading} />
         <p className="hint">
-          한 번에 {MAX_CHARS}자까지 가능해요. 대사가 많으면 자동으로 여러 구간으로 나눠서 순서대로 생성해요.
-          {estimatedRequests > 0 && ` 현재 대본은 Gemini 요청 약 ${estimatedRequests}회가 필요해요.`}
+          한 번에 {MAX_TEXT_CHARS}자까지 가능해요. 긴 대본은 자동으로 여러 구간으로 나눠 순서대로 만들고,
+          만든 구간은 이 브라우저에 저장해 둬요 — 실패하거나 하루 한도에 걸려도, 글을 조금 고쳐도
+          바뀐 구간만 다시 만들어요.
         </p>
       </div>
     </>

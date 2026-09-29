@@ -1,17 +1,16 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../../../lib/authOptions";
-import { deleteHistoryEntry, updateHistoryEntry } from "../../../../lib/store";
+import { jsonError, requireSession } from "../../../../lib/server/http.js";
+import { deleteHistoryEntry, updateHistoryEntry } from "../../../../lib/server/store.js";
 
 const MAX_NAME = 60;
 const MAX_FOLDER = 40;
 
 export async function PATCH(request, { params }) {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
+  const { session, response } = await requireSession();
+  if (response) return response;
 
   const body = await request.json().catch(() => null);
-  if (!body) return NextResponse.json({ error: "요청 형식이 올바르지 않아요." }, { status: 400 });
+  if (!body) return jsonError("요청 형식이 올바르지 않아요.", 400);
 
   const patch = {};
   if (typeof body.name === "string") {
@@ -26,18 +25,18 @@ export async function PATCH(request, { params }) {
     patch.folder = folder || null;
   }
 
-  if (Object.keys(patch).length === 0) {
-    return NextResponse.json({ error: "바꿀 내용이 없어요." }, { status: 400 });
-  }
+  if (Object.keys(patch).length === 0) return jsonError("바꿀 내용이 없어요.", 400);
 
-  const history = await updateHistoryEntry(session.user.email, params.id, patch);
-  return NextResponse.json({ history });
+  const { id } = await params;
+  const library = await updateHistoryEntry(session.user.email, id, patch);
+  return NextResponse.json(library);
 }
 
 export async function DELETE(_request, { params }) {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
+  const { session, response } = await requireSession();
+  if (response) return response;
 
-  const history = await deleteHistoryEntry(session.user.email, params.id);
-  return NextResponse.json({ history });
+  const { id } = await params;
+  const library = await deleteHistoryEntry(session.user.email, id);
+  return NextResponse.json(library);
 }

@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../../../lib/authOptions";
+import { MAX_FORMAT_CHARS, TEXT_MODEL } from "../../../../lib/shared/config.js";
+import { GeminiError, callGemini } from "../../../../lib/server/gemini.js";
+import { jsonError, requireApiKey, requireSession } from "../../../../lib/server/http.js";
+import { userKeyFor } from "../../../../lib/server/store.js";
 
-export const maxDuration = 30;
-
-const MODEL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent";
-const MAX_CHARS = 8000;
+export const maxDuration = 60;
 
 function buildPrompt(rawText, castNames) {
   return `다음은 사용자가 쓴 글입니다. 이걸 대사/나레이션이 구분된 "대본 형식"으로 바꿔주세요.
@@ -23,59 +22,48 @@ ${rawText}`;
 }
 
 export async function POST(request) {
-  const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
-
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: "서버에 GEMINI_API_KEY가 없어요." }, { status: 500 });
-  }
+  const { session, response } = await requireSession();
+  if (response) return response;
+  const { apiKey, response: keyResponse } = requireApiKey();
+  if (keyResponse) return keyResponse;
 
   const body = await request.json().catch(() => null);
   const rawText = (body?.text || "").trim();
   const castNames = Array.isArray(body?.castNames) ? body.castNames.filter(Boolean) : [];
 
-  if (!rawText) {
-    return NextResponse.json({ error: "정리할 글을 먼저 입력해주세요." }, { status: 400 });
-  }
-  if (rawText.length > MAX_CHARS) {
-    return NextResponse.json(
-      { error: `한 번에 ${MAX_CHARS}자까지만 정리할 수 있어요. 장면을 나눠서 넣어주세요.` },
-      { status: 400 }
-    );
+  if (!rawText) return jsonError("정리할 글을 먼저 입력해주세요.", 400);
+  if (rawText.length > MAX_FORMAT_CHARS) {
+    return jsonError(`한 번에 ${MAX_FORMAT_CHARS}자까지만 정리할 수 있어요. 장면을 나눠서 넣어주세요.`, 400);
   }
 
-  const requestBody = {
-    contents: [{ parts: [{ text: buildPrompt(rawText, castNames) }] }],
-    generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
-  };
-
-  let res;
+  let json;
   try {
-    res = await fetch(MODEL_URL, {
-      method: "POST",
-      headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-    });
-  } catch {
-    return NextResponse.json({ error: "Gemini 서버에 연결하지 못했어요." }, { status: 502 });
+    ({ json } = await callGemini({
+      path: `/models/${TEXT_MODEL}:generateContent`,
+      body: {
+        contents: [{ parts: [{ text: buildPrompt(rawText, castNames) }] }],
+        generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+      },
+      apiKey,
+      context: {
+        bucket: "text",
+        purpose: "format",
+        model: TEXT_MODEL,
+        user: userKeyFor(session.user.email).slice(0, 8),
+        details: { chars: rawText.length },
+      },
+      inspect: (result) => (result?.candidates?.[0]?.content?.parts?.[0]?.text
+        ? {}
+        : { error: "정리된 결과를 받지 못했어요." }),
+    }));
+  } catch (error) {
+    if (!(error instanceof GeminiError)) throw error;
+    return jsonError(error.message, 502, { code: error.code });
   }
 
-  const json = await res.json().catch(() => null);
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: json?.error?.message || `정리에 실패했어요 (HTTP ${res.status})` },
-      { status: 502 }
-    );
-  }
-
-  let text = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
   // Strip a stray markdown code fence in case the model wraps its answer in one.
-  text = text.trim().replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
-
-  if (!text) {
-    return NextResponse.json({ error: "정리된 결과를 받지 못했어요." }, { status: 502 });
-  }
-
+  const text = json.candidates[0].content.parts[0].text
+    .trim().replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
+  if (!text) return jsonError("정리된 결과를 받지 못했어요.", 502);
   return NextResponse.json({ text });
 }

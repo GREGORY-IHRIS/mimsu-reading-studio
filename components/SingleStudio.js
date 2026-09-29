@@ -1,51 +1,55 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { STYLE_PRESETS } from "../lib/voices";
-import { generateAndSave } from "../lib/audio";
+import { useMemo, useRef, useState } from "react";
+import GenerateButton from "./GenerateButton";
+import QuotaEstimate from "./QuotaEstimate";
 import TagToolbar from "./TagToolbar";
 import VoiceSelect from "./VoiceSelect";
+import useSpeechGeneration from "./useSpeechGeneration";
+import { singleEntryInfo } from "../lib/client/generate.js";
+import { MAX_TEXT_CHARS } from "../lib/shared/config.js";
+import { STYLE_PRESETS } from "../lib/shared/voices.js";
 
-const MAX_CHARS = 8000;
+const SPEAKER = "낭독";
 
-export default function SingleStudio({ voices, onHistory }) {
+export default function SingleStudio({ voices, onLibrary }) {
   const [text, setText] = useState("");
   const [voice, setVoice] = useState("Sulafat");
   const [style, setStyle] = useState("");
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const textareaRef = useRef(null);
+  const generation = useSpeechGeneration(onLibrary);
 
-  async function handleGenerate() {
+  // Long text is cut into pieces by the same planner the script studio uses.
+  const turns = useMemo(
+    () => (text.trim() ? [{ speaker: SPEAKER, voice, style: style.trim(), text }] : []),
+    [text, voice, style]
+  );
+
+  function handleGenerate() {
     setError("");
-    if (!text.trim()) {
+    if (turns.length === 0) {
       setError("먼저 읽을 글을 입력해주세요.");
       return;
     }
-    setLoading(true);
-    try {
-      const history = await generateAndSave({ text, voice, style });
-      onHistory(history);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    generation.run({ turns, purpose: "single", entry: singleEntryInfo({ text, voice, style: style.trim() }) });
   }
+
+  const shownError = error || generation.error;
 
   return (
     <div className="card">
       <label className="field-label" htmlFor="text">
         읽을 글{" "}
         <span className="char-count">
-          ({text.length}/{MAX_CHARS}자)
+          ({text.length}/{MAX_TEXT_CHARS}자)
         </span>
       </label>
       <textarea
         id="text"
         ref={textareaRef}
         value={text}
-        maxLength={MAX_CHARS}
+        maxLength={MAX_TEXT_CHARS}
         onChange={(e) => setText(e.target.value)}
         placeholder="여기에 대사나 장면을 붙여넣어 주세요."
       />
@@ -85,17 +89,23 @@ export default function SingleStudio({ voices, onHistory }) {
         </div>
       </div>
 
-      {error && (
+      {shownError && (
         <p className="error" style={{ marginTop: 16 }}>
-          {error}
+          {shownError}
         </p>
       )}
 
-      <button className="generate-button" onClick={handleGenerate} disabled={loading}>
-        {loading ? "만드는 중... (몇 초 걸려요)" : "목소리로 듣기"}
-      </button>
+      <GenerateButton
+        idleLabel="목소리로 듣기"
+        loading={generation.loading}
+        progress={generation.progress}
+        onGenerate={handleGenerate}
+        onStop={generation.stop}
+      />
+      <QuotaEstimate turns={turns} busy={generation.loading} />
       <p className="hint">
-        한 번에 {MAX_CHARS}자까지 가능해요. 긴 글은 장면 단위로 나눠서 넣어주시면 더 좋아요.
+        한 번에 {MAX_TEXT_CHARS}자까지 가능해요. 약 4,000자마다 Gemini 요청을 1회 쓰고, 만든 부분은 이 브라우저에
+        저장해 둬서 실패해도 이어서 만들 수 있어요.
       </p>
     </div>
   );
