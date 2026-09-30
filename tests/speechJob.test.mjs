@@ -187,3 +187,22 @@ test("a broken cache never breaks generation", async () => {
   assert.equal(sent.length, 3);
   assert.equal(await countUncached(calls, brokenCache), 3);
 });
+
+test("a clip that fails the check is not cached, so only it is redone next time", async () => {
+  const calls = threeCalls();
+  const cache = memoryCache();
+  const bad = new ApiError("cannot cut", "SPLIT_FAILED");
+  const checkClip = async (clip, call) => { if (call.index === 1) throw bad; };
+
+  const first = fakeSpeech();
+  await assert.rejects(
+    runSpeechJob({ calls, purpose: "script", requestSpeech: first.requestSpeech, joinClips, checkClip, cache, sleep: fastSleep }),
+    (error) => error.code === "SPLIT_FAILED" && error.stats.done === 1
+  );
+  assert.equal(first.sent.length, 2, "the job stops at the bad clip");
+  assert.equal(cache.store.size, 1, "the good clip stays cached, the bad one is not");
+
+  const second = fakeSpeech();
+  await runSpeechJob({ calls, purpose: "script", requestSpeech: second.requestSpeech, joinClips, cache, sleep: fastSleep });
+  assert.equal(second.sent.length, 2);
+});

@@ -23,8 +23,8 @@ export default function QuotaEstimate({ turns, busy = false }) {
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
-        const { calls, uncached } = await estimateJob(turns);
-        if (!cancelled) setEstimate({ total: calls.length, uncached });
+        const { calls, uncached, mode } = await estimateJob(turns);
+        if (!cancelled) setEstimate({ total: calls.length, uncached, mode });
       } catch {
         if (!cancelled) setEstimate(null);
       }
@@ -43,6 +43,7 @@ export default function QuotaEstimate({ turns, busy = false }) {
     <p className={`hint quota-estimate ${level}`}>
       이 글은 Gemini 요청 약 {estimate.total}회가 필요해요
       {saved > 0 && ` (이미 만들어 둔 ${saved}회분은 다시 쓰지 않아서 실제로는 ${estimate.uncached}회)`}.
+      {estimate.mode === "voices" && " 같은 목소리의 대사를 묶어 한 번에 만들어 아끼는 방식이에요."}
       {today && ` 오늘 남은 횟수: ${today.remaining}/${today.limit}회.`}
       {level === "over" && " ⚠ 남은 횟수보다 많아요 — 시작하면 확인 창이 떠요."}
       {level === "exhausted" && " ⚠ 오늘 한도를 다 썼어요."}

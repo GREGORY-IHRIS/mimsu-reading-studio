@@ -7,7 +7,11 @@ Next.js 15 + next-auth(구글 로그인, 화이트리스트) + Gemini TTS. Verce
 
 호출 하나 = 한도 1회. 그래서 구조 전체가 "호출을 덜 쓰는 것"과 "쓴 걸 기록하는 것"을 중심으로 짜여 있다.
 
-- **계획** `lib/shared/scriptPlan.js` — 대본 → 최소 개수의 호출. 호출 하나에 화자 2명·4000자·120줄까지(`lib/shared/config.js`).
+- **계획** `lib/shared/scriptPlan.js` — 대본 → 최소 개수의 호출. 두 방식 중 더 적게 드는 쪽을 자동 선택:
+  (1) `sequence`: 순서대로, 호출 하나에 화자 2명·4000자·120줄까지(`lib/shared/config.js`).
+  (2) `voices`: 같은 목소리의 모든 대사를 한 호출에 몰아 `<long pause>`로 구분해 만든 뒤, 브라우저가 무음 구간으로 잘라
+  (`lib/shared/wavSplit.js`, 글자 수 비례 검증 포함) 원래 순서로 재조립. 호출 수 = 목소리 수. 자르기 실패(SPLIT_FAILED)는
+  캐시하지 않고 같은 계획을 1번 재시도, 또 실패하면 `sequence`로 (`lib/client/generate.js`).
 - **실행** `lib/client/speechJob.js` — 브라우저가 호출을 하나씩 보냄. 끝난 호출은 즉시 IndexedDB(`clipCache.js`)에
   요청 해시로 저장 → 실패/한도 초과/글 수정 후에도 바뀐 구간만 다시 생성. 재시도 정책도 여기(서버는 재시도 안 함).
 - **서버** `app/api/tts/route.js` → `lib/server/tts.js` → `lib/server/gemini.js#callGemini` 가 유일한 Gemini 출입구.

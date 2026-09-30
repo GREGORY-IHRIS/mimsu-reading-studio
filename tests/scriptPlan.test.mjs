@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MAX_CHARS_PER_CALL, MAX_TURNS_PER_CALL } from "../lib/shared/config.js";
+import { PAUSE_SEPARATOR } from "../lib/shared/wavSplit.js";
 import { makeSpeechGroups, planCalls, splitIntoRuns, validateCall } from "../lib/shared/scriptPlan.js";
 
 const turn = (speaker, voice, text, style = "") => ({ speaker, voice, text, style });
@@ -45,7 +46,7 @@ test("long scripts keep every character and respect the per-call limits", () => 
   const turns = Array.from({ length: 60 }, (_, i) =>
     turn(`화자${i % 4}`, `Voice${i % 4}`, "가".repeat(i < 20 ? 134 : 133))
   );
-  const { calls, chars } = planCalls(turns);
+  const { calls, chars } = planCalls(turns, { mode: "sequence" });
   assert.equal(chars, 8000);
   assert.ok(calls.every((call) => call.chars <= MAX_CHARS_PER_CALL));
   assert.ok(calls.every((call) => call.turns.length <= MAX_TURNS_PER_CALL));
@@ -104,4 +105,48 @@ test("splitIntoRuns merges neighbours with the same speaker and style", () => {
     turn("A", "Kore", "1"), turn("A", "Kore", "2"), turn("B", "Puck", "3"), turn("A", "Kore", "4"),
   ]);
   assert.deepEqual(runs.map((run) => run.map((t) => t.text)), [["1", "2"], ["3"], ["4"]]);
+});
+
+// ── per-voice plan ──────────────────────────────────────────────────────────
+
+const interleaved = () => Array.from({ length: 12 }, (_, i) => turn(`화자${i % 4}`, `Voice${i % 4}`, `${i}번째 대사예요.`));
+
+test("four voices trading lines cost one call per voice, not one per change", () => {
+  const seq = planCalls(interleaved(), { mode: "sequence" });
+  const plan = planCalls(interleaved());
+  assert.equal(seq.calls.length, 6);
+  assert.equal(plan.mode, "voices");
+  assert.equal(plan.calls.length, 4);
+  assert.equal(plan.pieceCount, 12);
+});
+
+test("every line lands in exactly one per-voice call, in order within its voice", () => {
+  const plan = planCalls(interleaved());
+  const all = plan.calls.flatMap((call) => call.pieceIndices).sort((a, b) => a - b);
+  assert.deepEqual(all, Array.from({ length: 12 }, (_, i) => i));
+  for (const call of plan.calls) {
+    assert.equal(call.turns.length, 1);
+    assert.equal(call.turns[0].text.split(PAUSE_SEPARATOR).length, call.pieceIndices.length);
+    assert.deepEqual(call.pieceIndices, [...call.pieceIndices].sort((a, b) => a - b));
+    assert.equal(validateCall(call.turns), null);
+  }
+});
+
+test("two speakers keep the in-order plan (one conversational call is cheaper or equal)", () => {
+  const turns = Array.from({ length: 8 }, (_, i) => turn(`화자${i % 2}`, `Voice${i % 2}`, `${i}번째 대사예요.`));
+  const plan = planCalls(turns);
+  assert.equal(plan.mode, "sequence");
+  assert.equal(plan.calls.length, 1);
+});
+
+test("lines that already contain a pause tag never use the per-voice plan", () => {
+  const turns = interleaved();
+  turns[3] = turn("화자3", "Voice3", "잠깐 <long pause> 생각했다.");
+  assert.equal(planCalls(turns).mode, "sequence");
+});
+
+test("a voice with different styles is planned as separate streams", () => {
+  const turns = interleaved().map((t, i) => ({ ...t, style: i < 6 ? "차분하게" : "밝게" }));
+  const plan = planCalls(turns);
+  assert.ok(plan.calls.every((call) => new Set(call.turns.map((t) => t.style)).size === 1));
 });
