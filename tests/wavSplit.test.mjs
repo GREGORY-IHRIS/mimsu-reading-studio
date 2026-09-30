@@ -71,3 +71,30 @@ test("a cut inside a sentence is caught by the length check", () => {
   assert.equal(findPauseCuts(pcm, RATE, [30, 1, 1]).ok, false);
   assert.equal(findPauseCuts(pcm, RATE, [10, 10, 10]).ok, true);
 });
+
+test("a line break the model made short is still found by where the text says it should be", () => {
+  // Line 2 ends with only a 0.5 s pause, but the in-line pause near it is far away.
+  const pcm = recording([
+    { speech: 2, pause: 3.0 },
+    { speech: 1, pause: 0.35 }, { speech: 1, pause: 0.5 },
+    { speech: 2.5, pause: 0 },
+  ]);
+  const result = findPauseCuts(pcm, RATE, [20, 20, 25]);
+  assert.equal(result.ok, true);
+  const [a, b, c] = result.ranges.map(([from, to]) => seconds(to - from));
+  assert.ok(a > 2 && a < 2.5, `first line ${a}`);
+  assert.ok(b > 2 && b < 3, `second line ${b}`);
+  assert.ok(c > 2.4, `third line ${c}`);
+});
+
+test("a long pause inside a line is not mistaken for a line break", () => {
+  // Line 1 contains a 1.3 s dramatic pause; the real break to line 2 is 3 s.
+  const pcm = recording([
+    { speech: 2, pause: 1.3 }, { speech: 2, pause: 3.0 }, { speech: 3.5, pause: 0 },
+  ]);
+  const result = findPauseCuts(pcm, RATE, [40, 35]);
+  assert.equal(result.ok, true);
+  const [a, b] = result.ranges.map(([from, to]) => seconds(to - from));
+  assert.ok(a > 5 && a < 5.8, `first line ${a}`);
+  assert.ok(b > 3.4 && b < 4.2, `second line ${b}`);
+});
