@@ -44,6 +44,8 @@ export default function QuotaEstimate({ turns, busy = false }) {
       이 글은 Gemini 요청 약 {estimate.total}회가 필요해요
       {saved > 0 && ` (이미 만들어 둔 ${saved}회분은 다시 쓰지 않아서 실제로는 ${estimate.uncached}회)`}.
       {estimate.mode === "voices" && " 같은 목소리의 대사를 묶어 한 번에 만들어 아끼는 방식이에요."}
+      {estimate.mode === "pairs" && " 목소리 2명씩 대사를 묶어 한 번에 만들어 아끼는 방식이에요."}
+      {estimate.mode !== "sequence" && " 줄 경계가 애매해 다시 만들어야 하는 줄이 생기면 몇 회 더 쓸 수 있어요."}
       {today && ` 오늘 남은 횟수: ${today.remaining}/${today.limit}회.`}
       {level === "over" && " ⚠ 남은 횟수보다 많아요 — 시작하면 확인 창이 떠요."}
       {level === "exhausted" && " ⚠ 오늘 한도를 다 썼어요."}

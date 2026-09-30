@@ -6,6 +6,7 @@
 //   curl -X POST localhost:4010/__set -d '{"dailyLimit":5,"perMinute":3,"rejectConversations":true}'
 //   curl localhost:4010/__stats
 import http from "node:http";
+import { synthesize, textsOfRequest, wavFromPcm } from "./synth-speech.mjs";
 
 export const defaults = {
   dailyLimit: 100,          // after this many successful calls: 429 "requests per day"
@@ -13,9 +14,11 @@ export const defaults = {
   rejectConversations: false, // answer 400 to multi-speaker requests
   failEvery: 0,             // every Nth call: 503
   latencyMs: 150,
+  weakPauseShare: 0.1,      // share of <long pause> tags the fake model "forgets" (pause of only 0.3 s)
 };
 
 // 24 kHz, 16-bit mono WAV with a quiet tone; ~0.05 s per input character.
+// (Used for voice previews; speech requests get the more lifelike synth-speech.)
 function makeWav(chars) {
   const samples = Math.max(2400, Math.round(chars * 0.05 * 24000));
   const data = Buffer.alloc(samples * 2);
@@ -76,8 +79,12 @@ export function startMockGemini({ port = 4010, quiet = false, ...overrides } = {
       stats.ok++;
       stats.recent.push(now);
       log(`#${stats.calls} ${chars} chars${conversation ? " (conversation)" : ""} → 200`);
+      // Speech-like audio: a tone per line with sentence pauses and a pause
+      // wherever the request has a <long pause> tag, so the app's cutting of
+      // several lines out of one recording can be tried without real quota.
+      const pcm = synthesize(textsOfRequest(body), { pause: () => (Math.random() < config.weakPauseShare ? 0.3 : 1.2 + Math.random() * 0.5) });
       return send(200, {
-        steps: [{ type: "model_output", content: [{ type: "audio", mime_type: "audio/wav", data: makeWav(chars).toString("base64") }] }],
+        steps: [{ type: "model_output", content: [{ type: "audio", mime_type: "audio/wav", data: wavFromPcm(pcm).toString("base64") }] }],
       });
     }
 

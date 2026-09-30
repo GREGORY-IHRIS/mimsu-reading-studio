@@ -30,6 +30,7 @@ export function progressLabel(progress) {
   if (progress.saving) return "음성 합치고 저장하는 중...";
   const detail = `${progress.done}/${progress.total} 구간${progress.cached ? `, 저장분 ${progress.cached}개 재사용` : ""}`;
   if (progress.waitSeconds) return `요청 제한 대기 중... 약 ${progress.waitSeconds}초 (${detail})`;
+  if (progress.round > 1) return `경계가 애매한 ${progress.pending}줄을 다시 만드는 중... (${detail})`;
   return `생성 중... (${detail})`;
 }
 

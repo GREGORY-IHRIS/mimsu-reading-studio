@@ -31,6 +31,15 @@ function toTurns(parsedTurns, cast, fallbackVoice, overrideStyle) {
   });
 }
 
+// The cast plus a free voice for every name that is not in it yet.
+function withNewcomers(cast, unknownSpeakers, voices) {
+  const additions = [];
+  for (const name of unknownSpeakers) {
+    additions.push({ name, voice: nextAvailableVoice(voices, [...cast, ...additions], name), style: "" });
+  }
+  return additions.length ? [...cast, ...additions] : cast;
+}
+
 export default function ScriptStudio({ cast, setCast, voices, onLibrary }) {
   const [scriptText, setScriptText] = useState("");
   const [overrideStyle, setOverrideStyle] = useState("");
@@ -41,8 +50,10 @@ export default function ScriptStudio({ cast, setCast, voices, onLibrary }) {
   const generation = useSpeechGeneration(onLibrary);
 
   const preview = useMemo(() => parseScript(scriptText, cast), [scriptText, cast]);
+  // The estimate must use the voices the job will really use, including the
+  // ones handed out to characters that are not in the cast yet.
   const estimateTurns = useMemo(
-    () => (voices.length ? toTurns(preview.turns, cast, voices[0].id, overrideStyle) : []),
+    () => (voices.length ? toTurns(preview.turns, withNewcomers(cast, preview.unknownSpeakers, voices), voices[0].id, overrideStyle) : []),
     [preview, cast, voices, overrideStyle]
   );
 
@@ -78,17 +89,12 @@ export default function ScriptStudio({ cast, setCast, voices, onLibrary }) {
       return;
     }
 
-    let workingCast = cast;
+    const workingCast = withNewcomers(cast, parsed.unknownSpeakers, voices);
     if (parsed.unknownSpeakers.length > 0) {
-      const additions = [];
-      for (const name of parsed.unknownSpeakers) {
-        const voice = nextAvailableVoice(voices, [...workingCast, ...additions], name);
-        additions.push({ name, voice, style: "" });
-      }
-      workingCast = [...workingCast, ...additions];
       setCast(workingCast);
       setNote(
-        `새 등장인물을 발견해서 목소리를 자동으로 배정했어요: ${additions
+        `새 등장인물을 발견해서 목소리를 자동으로 배정했어요: ${workingCast
+          .slice(cast.length)
           .map((a) => `${a.name}(${a.voice})`)
           .join(", ")}. 마음에 안 들면 위 출연진 목록에서 바꾸고 다시 생성해주세요.`
       );

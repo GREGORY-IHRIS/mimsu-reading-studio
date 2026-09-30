@@ -188,21 +188,44 @@ test("a broken cache never breaks generation", async () => {
   assert.equal(await countUncached(calls, brokenCache), 3);
 });
 
-test("a clip that fails the check is not cached, so only it is redone next time", async () => {
+test("onClip sees every clip and can stop the rest of the job", async () => {
+  const calls = threeCalls();
+  const { sent, requestSpeech } = fakeSpeech();
+  const seen = [];
+  const result = await runSpeechJob({
+    calls, purpose: "script", requestSpeech, joinClips, sleep: fastSleep,
+    onClip: async (clip, call) => { seen.push(call.index); return call.index === 1 ? "stop" : undefined; },
+  });
+  assert.deepEqual(seen, [0, 1]);
+  assert.equal(sent.length, 2, "the third call is never sent");
+  assert.equal(result.clips.length, 2);
+  assert.equal(result.stopped, true);
+});
+
+test("a call listed as fresh is sent again even though its answer is cached", async () => {
   const calls = threeCalls();
   const cache = memoryCache();
-  const bad = new ApiError("cannot cut", "SPLIT_FAILED");
-  const checkClip = async (clip, call) => { if (call.index === 1) throw bad; };
+  await runSpeechJob({ calls, purpose: "script", requestSpeech: fakeSpeech().requestSpeech, joinClips, cache, sleep: fastSleep });
 
-  const first = fakeSpeech();
+  const again = fakeSpeech();
+  await runSpeechJob({
+    calls, purpose: "script", requestSpeech: again.requestSpeech, joinClips, cache, sleep: fastSleep,
+    fresh: new Set([calls[1].signature]),
+  });
+  assert.equal(again.sent.length, 1);
+  assert.equal(again.sent[0].job.index, 1);
+});
+
+test("a rejected call that will be cut apart is not redone as separate runs", async () => {
+  const cutCall = {
+    index: 0, signature: "s", firstLine: 0, lastLine: 1,
+    turns: [turn("A", "Kore", "가"), turn("B", "Puck", "나")],
+    cut: { lines: [] },
+  };
+  const { requestSpeech, sent } = fakeSpeech({ 1: new ApiError("no", "REJECTED") });
   await assert.rejects(
-    runSpeechJob({ calls, purpose: "script", requestSpeech: first.requestSpeech, joinClips, checkClip, cache, sleep: fastSleep }),
-    (error) => error.code === "SPLIT_FAILED" && error.stats.done === 1
+    runSpeechJob({ calls: [cutCall], purpose: "script", requestSpeech, joinClips, sleep: fastSleep }),
+    (error) => error.code === "REJECTED"
   );
-  assert.equal(first.sent.length, 2, "the job stops at the bad clip");
-  assert.equal(cache.store.size, 1, "the good clip stays cached, the bad one is not");
-
-  const second = fakeSpeech();
-  await runSpeechJob({ calls, purpose: "script", requestSpeech: second.requestSpeech, joinClips, cache, sleep: fastSleep });
-  assert.equal(second.sent.length, 2);
+  assert.equal(sent.length, 1);
 });
